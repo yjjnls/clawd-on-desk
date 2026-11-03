@@ -152,13 +152,15 @@ body { padding: 6px; }
 .card[data-mode="notify"] .summary,
 .card[data-mode="notify"] .detail,
 .card[data-mode="notify"] .actions { display: none; }
-.notify-list { display: none; flex-direction: column; gap: 8px; }
+.notify-list { display: none; flex-direction: column; align-items: flex-start; gap: 10px; }
 .card[data-mode="notify"] .notify-list { display: flex; }
 .notify-item {
   position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
+  width: fit-content;
+  max-width: 100%;
   padding: 10px 30px 10px 12px;
   border-radius: 18px;
   background: color-mix(in srgb, var(--card-bg) 88%, transparent);
@@ -169,6 +171,33 @@ body { padding: 6px; }
   transition: transform 0.15s ease, background 0.15s ease;
   animation: notify-pop 0.32s var(--ease-spring) both;
 }
+/* Comic-strip tail: two fading dots walking toward the pet. */
+.notify-item::after {
+  content: "";
+  position: absolute;
+  left: 22px;
+  bottom: -9px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-top: none;
+  border-left: none;
+}
+.notify-item::before {
+  content: "";
+  position: absolute;
+  left: 34px;
+  bottom: -17px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: inherit;
+  opacity: 0.85;
+}
+.notify-item:last-of-type::after,
+.notify-item:last-of-type::before { display: block; }
 .notify-item:hover {
   background: color-mix(in srgb, var(--card-bg) 96%, transparent);
   transform: translateY(-1px);
@@ -416,7 +445,11 @@ function modeLabel(mode, lang) {
 
 function reportHeight() {
   requestAnimationFrame(() => {
-    window.updateBubbleAPI.reportHeight(card.offsetHeight + 16);
+    // Bubble strings hug their content: report the widest bubble so the
+    // window shrinks to the speech bubbles instead of a fixed panel.
+    const listWidth = notifyListEl.offsetWidth
+      || card.scrollWidth;
+    window.updateBubbleAPI.reportHeight(card.offsetHeight + 16, Math.ceil(listWidth) + 12);
   });
 }
 

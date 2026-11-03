@@ -298,6 +298,7 @@ module.exports = function initUpdateBubble(ctx) {
   let policyClass = "update";
   // CSS px, as reported by the renderer; converted to DIP where consumed.
   let measuredHeight = 0;
+  let measuredWidth = 0;
   let activePayload = null;
   let resolveAction = null;
   let hideTimer = null;
@@ -407,6 +408,9 @@ module.exports = function initUpdateBubble(ctx) {
     const wa = target && target.workArea ? target.workArea : getTargetWorkArea(petBounds);
     const scale = target && Number.isFinite(target.scale) ? target.scale : getTextScale(wa);
     const height = scaleHeight(measuredHeight || estimateHeight(activePayload), scale);
+    // Speech bubbles hug their content: a measured width wins over the
+    // panel default so the window isn't a wide slab around narrow bubbles.
+    const contentWidth = measuredWidth > 0 ? scaleWidth(measuredWidth, scale) : scaleWidth(WIDTH, scale);
     const anchorRect = ctx.bubbleFollowPet && typeof ctx.getUpdateBubbleAnchorRect === "function"
       ? ctx.getUpdateBubbleAnchorRect(petBounds)
       : null;
@@ -416,7 +420,7 @@ module.exports = function initUpdateBubble(ctx) {
       bubbleFollowPet: ctx.bubbleFollowPet,
       followPreference: ctx.bubbleFollowPreference,
       fixedCorner: ctx.bubbleFixedCorner,
-      width: Math.min(scaleWidth(WIDTH, scale), Math.floor(wa.width * MAX_WORK_AREA_WIDTH_RATIO)),
+      width: Math.min(Math.max(contentWidth, Math.round(200 * scale)), Math.floor(wa.width * MAX_WORK_AREA_WIDTH_RATIO)),
       edgeMargin: Math.round(EDGE_MARGIN * scale),
       gap: Math.round(GAP * scale),
       height,
@@ -746,11 +750,23 @@ module.exports = function initUpdateBubble(ctx) {
     resolveCurrentAction(actionId);
   }
 
-  function handleUpdateBubbleHeight(event, height) {
+  function handleUpdateBubbleHeight(event, payload) {
     const senderWin = BrowserWindow.fromWebContents(event.sender);
     if (!bubble || senderWin !== bubble) return;
+    // Legacy senders pass a bare height; the bubble renderer also reports
+    // its content width so notify strings can shrink-wrap.
+    const height = typeof payload === "number" ? payload : payload && payload.height;
+    const width = (typeof payload === "object" && payload) ? payload.width : null;
+    let changed = false;
     if (typeof height === "number" && height > 0) {
       measuredHeight = Math.ceil(height);
+      changed = true;
+    }
+    if (Number.isFinite(width) && width > 0) {
+      measuredWidth = Math.ceil(width);
+      changed = true;
+    }
+    if (changed) {
       repositionUpdateBubble();
       notifyOrbitGeometryChanged();
     }

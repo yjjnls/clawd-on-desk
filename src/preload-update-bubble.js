@@ -6,5 +6,5 @@ contextBridge.exposeInMainWorld("updateBubbleAPI", {
   onCopyResult: (cb) => ipcRenderer.on("update-bubble-copy-result", (_, data) => cb(data)),
   choose: (actionId) => ipcRenderer.send("update-bubble-action", actionId),
   dismissNotification: (id) => ipcRenderer.send("update-bubble-notify-dismiss", id),
-  reportHeight: (height) => ipcRenderer.send("update-bubble-height", height),
+  reportHeight: (height, width) => ipcRenderer.send("update-bubble-height", { height, width }),
 });
