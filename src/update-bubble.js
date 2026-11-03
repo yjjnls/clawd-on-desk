@@ -59,19 +59,21 @@ function deferMacFloatingVisibility(ctx, win) {
   }, MAC_FLOATING_TOPMOST_DELAY_MS);
 }
 
+// Which bubble policy the current payload uses: "update" for updater
+// prompts, "notification" when a session notification borrows the window.
+// Module scope on purpose — getPolicy() runs outside the initUpdateBubble
+// closure and must see the same value showUpdateBubble() sets.
+let policyClass = "update";
+
 function getPolicy(ctx) {
   if (typeof ctx.getBubblePolicy === "function") {
     try {
       // Session notifications ride the same window with the notification
-      // class's policy (auto-close seconds), updater payloads keep "update".
+      // class's policy (auto-close seconds, notificationBubbleAutoCloseSeconds
+      // in prefs) — the original dismiss-by-itself behavior; clicking a row
+      // still clears it early.
       const policy = ctx.getBubblePolicy(policyClass);
-      if (policy && typeof policy.enabled === "boolean") {
-        // Notices stay on screen until dismissed one by one — the auto-close
-        // budget belongs to the updater prompts, not to a list the user is
-        // working through.
-        if (policyClass === "notification") return { enabled: policy.enabled, autoCloseMs: 0 };
-        return policy;
-      }
+      if (policy && typeof policy.enabled === "boolean") return policy;
     } catch {}
   }
   return { enabled: true, autoCloseMs: 0 };
@@ -293,9 +295,6 @@ function computeUpdateBubbleBounds({
 
 module.exports = function initUpdateBubble(ctx) {
   let bubble = null;
-  // Which bubble policy the current payload uses: "update" for updater
-  // prompts, "notification" when a session notification borrows the window.
-  let policyClass = "update";
   // CSS px, as reported by the renderer; converted to DIP where consumed.
   let measuredHeight = 0;
   let measuredWidth = 0;
@@ -470,6 +469,9 @@ module.exports = function initUpdateBubble(ctx) {
     if (autoCloseTimer) return true;
 
     const policy = getPolicy(ctx);
+    if (typeof ctx.debugLog === "function") {
+      ctx.debugLog(`present cls=${policyClass} enabled=${policy.enabled} autoClose=${policy.autoCloseMs} timer=${!!autoCloseTimer}`);
+    }
     if (!policy.enabled) {
       hideForPolicy();
       return false;
@@ -532,8 +534,10 @@ module.exports = function initUpdateBubble(ctx) {
     const delay = Math.min(policy.autoCloseMs, Number(remainingMs));
     if (!Number.isFinite(delay) || delay <= 0) return;
     visibleSince = Date.now();
+    if (typeof ctx.debugLog === "function") ctx.debugLog(`schedule autoClose delay=${delay}`);
     autoCloseTimer = setTimeout(() => {
       autoCloseTimer = null;
+      if (typeof ctx.debugLog === "function") ctx.debugLog("autoClose fired");
       expireAutoClose(payload);
     }, delay);
   }
@@ -565,6 +569,9 @@ module.exports = function initUpdateBubble(ctx) {
   function showUpdateBubble(payload) {
     policyClass = payload && payload.mode === "notify" ? "notification" : "update";
     const policy = getPolicy(ctx);
+    if (typeof ctx.debugLog === "function") {
+      ctx.debugLog(`show mode=${payload && payload.mode} cls=${policyClass} enabled=${policy.enabled} autoClose=${policy.autoCloseMs}`);
+    }
     const fallback = payload && payload.defaultAction != null ? payload.defaultAction : null;
     if (hideTimer) {
       clearTimeout(hideTimer);

@@ -161,43 +161,34 @@ body { padding: 6px; }
   gap: 10px;
   width: fit-content;
   max-width: 100%;
-  padding: 10px 30px 10px 12px;
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--card-bg) 88%, transparent);
-  backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.34), var(--card-inset, none);
+  padding: 10px 22px 10px 14px;
+  border-radius: 22px 6px 22px 6px;
+  background: #0a0c12;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
   cursor: pointer;
-  transition: transform 0.15s ease, background 0.15s ease;
+  transition: transform 0.15s ease;
   animation: notify-pop 0.32s var(--ease-spring) both;
 }
-/* Comic-strip tail: two fading dots walking toward the pet. */
-.notify-item::after {
-  content: "";
-  position: absolute;
-  left: 22px;
-  bottom: -9px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-top: none;
-  border-left: none;
-}
+.notify-item:hover { transform: translateY(-1px); }
+/* Smoothed HUD card: clipped-corner black shape with a slow flowing edge. */
 .notify-item::before {
   content: "";
   position: absolute;
-  left: 34px;
-  bottom: -17px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: inherit;
-  opacity: 0.85;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(120deg, #d97757, #5b8dd9, #6fcf96, #d97757);
+  background-size: 300% 300%;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: notify-flow 3s linear infinite;
+  pointer-events: none;
 }
-.notify-item:last-of-type::after,
-.notify-item:last-of-type::before { display: block; }
+@keyframes notify-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
 .notify-item:hover {
   background: color-mix(in srgb, var(--card-bg) 96%, transparent);
   transform: translateY(-1px);

@@ -1887,10 +1887,22 @@ function petNotifyIconUrl(kind) {
   }
 }
 
+// Rows expire with the same auto-close budget as the bubble window, so a
+// dismissed string never resurrects on the next notice.
+function prunePetNotifications() {
+  const ttlMs = Math.max(0, Number(_settingsController.get("notificationBubbleAutoCloseSeconds")) || 0) * 1000;
+  if (!(ttlMs > 0)) return;
+  const now = Date.now();
+  for (const [key, item] of petNotifications) {
+    if (now - item.createdAt > ttlMs) petNotifications.delete(key);
+  }
+}
+
 function systemNotify({ kind, sessionId, title, body }) {
   try {
     if (!_settingsController.get("systemNotifyEnabled")) return;
     if (doNotDisturb) return;
+    prunePetNotifications();
     const id = `${kind || "info"}:${sessionId || "global"}`;
     petNotifications.set(id, {
       id,
@@ -1898,6 +1910,7 @@ function systemNotify({ kind, sessionId, title, body }) {
       title: String(title || ""),
       message: String(body || ""),
       iconUrl: petNotifyIconUrl(kind || "waiting"),
+      createdAt: Date.now(),
     });
     renderPetNotifications();
   } catch (err) {
@@ -2354,6 +2367,11 @@ function getPendingPermissionFocusEntry(sessionId) {
 
 const _updateBubbleCtx = {
   onNotifyDismiss: dismissPetNotification,
+  debugLog: (msg) => {
+    try {
+      updateLog(`[bubble] ${msg}`);
+    } catch {}
+  },
   get win() { return win; },
   get bubbleFollowPet() { return bubbleFollowPet; },
   get bubbleFollowPreference() { return bubbleFollowPreference; },
