@@ -3083,3 +3083,159 @@ describe("roam fence round-4 review (#810): edge fences", () => {
     );
   });
 });
+
+describe("busy pacing (works beside an active session)", () => {
+  beforeEach(() => {
+    const randomValues = [0.9, 0.9, 0.9, 0.1];
+    let randomIndex = 0;
+    mock.method(
+      Math,
+      "random",
+      () => randomValues[randomIndex++ % randomValues.length],
+    );
+    mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  });
+
+  afterEach(() => {
+    mock.timers.reset();
+    mock.reset();
+  });
+
+  function makeBusyCtx(overrides = {}) {
+    const ctx = makeCtx({
+      hasActiveSessions: () => true,
+      ...overrides,
+    });
+    ctx.setCurrentState("working");
+    return ctx;
+  }
+
+  it("paces beside a working session without stealing its visual", () => {
+    const ctx = makeBusyCtx();
+    const roam = roamModule(ctx);
+    roam.setEnabled(true);
+    roam.tick();
+    assert.equal(roam.isRoamAnimating(), false);
+    mock.timers.tick(14999);
+    assert.equal(roam.isRoamAnimating(), false);
+    mock.timers.tick(1);
+    assert.equal(roam.isRoamAnimating(), true);
+    assert.ok(
+      ctx._appliedBounds.length > 0,
+      "the walk moves the window",
+    );
+    assert.equal(
+      ctx._stateLog.some((event) => event.state === "roam"),
+      false,
+      "pacing keeps the working visual — no roam state swap",
+    );
+    assert.equal(ctx.getCurrentState(), "working");
+    roam.setEnabled(false);
+  });
+
+  it("keeps the working visual and state when the walk completes", () => {
+    const ctx = makeBusyCtx();
+    const roam = roamModule(ctx);
+    roam.setEnabled(true);
+    roam.tick();
+    mock.timers.tick(15000);
+    // Walk the whole animation out (long enough for any 80px/s idle-speed
+    // walk; busy pacing is slower, so also drive extra frames).
+    mock.timers.tick(20000);
+    assert.equal(roam.isRoamAnimating(), false);
+    assert.equal(
+      ctx._stateLog.some(
+        (event) => event.type === "setState" && event.state === "idle",
+      ),
+      false,
+      "completion must not force the pet back to idle",
+    );
+    assert.equal(ctx.getCurrentState(), "working");
+    roam.setEnabled(false);
+  });
+
+  it("stays within a small stride of its starting spot", () => {
+    const ctx = makeBusyCtx();
+    const roam = roamModule(ctx);
+    roam.setEnabled(true);
+    roam.tick();
+    mock.timers.tick(15000);
+    mock.timers.tick(20000);
+    assert.ok(ctx._appliedBounds.length > 0);
+    // Each pace targets within BUSY_ROAM_MAX_DIST (220) of where the step
+    // started, so consecutive frames never jump farther than that cap —
+    // the stroll may drift over rounds, but no single stride is long.
+    let prev = { x: 400, y: 300 };
+    for (const b of ctx._appliedBounds) {
+      const dx = b.x - prev.x;
+      const dy = b.y - prev.y;
+      assert.ok(
+        Math.abs(dx) <= 240 && Math.abs(dy) <= 240,
+        `a single stride moved too far: ${prev.x},${prev.y} -> ${b.x},${b.y}`,
+      );
+      prev = { x: b.x, y: b.y };
+    }
+    roam.setEnabled(false);
+  });
+
+  it("an alert cancels the pacing mid-stride without forcing idle", () => {
+    const ctx = makeBusyCtx();
+    const roam = roamModule(ctx);
+    roam.setEnabled(true);
+    roam.tick();
+    mock.timers.tick(15000);
+    assert.equal(roam.isRoamAnimating(), true);
+    ctx.setCurrentState("notification");
+    mock.timers.tick(16);
+    assert.equal(roam.isRoamAnimating(), false);
+    assert.equal(ctx.getCurrentState(), "notification");
+    assert.equal(
+      ctx._stateLog.some(
+        (event) => event.type === "setState" && event.state === "idle",
+      ),
+      false,
+      "cancelling a pace must not stomp the alert",
+    );
+    roam.setEnabled(false);
+  });
+
+  it("does not pace when the last session goes quiet", () => {
+    let active = true;
+    const ctx = makeBusyCtx({ hasActiveSessions: () => active });
+    const roam = roamModule(ctx);
+    roam.setEnabled(true);
+    roam.tick();
+    active = false;
+    mock.timers.tick(30000);
+    assert.equal(roam.isRoamAnimating(), false);
+    assert.equal(ctx._appliedBounds.length, 0);
+    roam.setEnabled(false);
+  });
+
+  it("hands back to the idle-roam schedule with the full 8s first walk", () => {
+    const ctx = makeBusyCtx();
+    const roam = roamModule(ctx);
+    roam.setEnabled(true);
+    roam.tick();
+    // One busy pace cycle completes and arms a busy pause timer.
+    mock.timers.tick(15000);
+    mock.timers.tick(20000);
+    assert.equal(roam.isRoamAnimating(), false);
+    // The session goes quiet and the pet idles.
+    ctx.hasActiveSessions = () => false;
+    ctx.setCurrentState("idle");
+    roam.tick();
+    mock.timers.tick(7999);
+    assert.equal(roam.isRoamAnimating(), false);
+    mock.timers.tick(1);
+    assert.equal(roam.isRoamAnimating(), true);
+    assert.equal(
+      ctx._stateLog.some(
+        (event) => event.type === "applyState" && event.state === "roam",
+      ),
+      true,
+      "idle roaming swaps to the roam visual as before",
+    );
+    roam.setEnabled(false);
+  });
+});

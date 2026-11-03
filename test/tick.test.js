@@ -1919,3 +1919,71 @@ describe("tick conditional idle easter eggs", () => {
     assert.deepStrictEqual(idleFiles(), ["clawd-outlaw-bender.svg"]);
   });
 });
+
+describe("tick busy pacing wiring (works beside a live session)", () => {
+  let cursor;
+  let loader;
+  let tickApi;
+  let ctx;
+  let statesSeen;
+
+  beforeEach(() => {
+    mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+    cursor = { x: 40, y: 40 };
+    loader = loadTickWithScreen(() => ({ ...cursor }));
+    statesSeen = [];
+  });
+
+  afterEach(() => {
+    if (tickApi) tickApi.cleanup();
+    if (loader) loader.restore();
+    mock.timers.reset();
+    tickApi = null;
+    ctx = null;
+  });
+
+  function makeBusyCtx() {
+    const theme = cloneTheme(_defaultTheme);
+    const c = makeCtx(theme, statesSeen);
+    c.currentState = "working";
+    c.roamTicks = 0;
+    c.roamCancels = 0;
+    c.roam = {
+      enabled: true,
+      busyPaceState: (state) =>
+        ["working", "thinking", "executing", "juggling", "sweeping"].includes(state),
+      cancelRoam() { c.roamCancels += 1; },
+      tick() { c.roamTicks += 1; },
+    };
+    return c;
+  }
+
+  it("services roam.tick while a working session runs", () => {
+    ctx = makeBusyCtx();
+    tickApi = loader.initTick(ctx);
+    tickApi.startMainTick();
+    mock.timers.tick(2000);
+    assert.ok(ctx.roamTicks > 0, "the busy pet must reach roam's scheduler");
+    assert.equal(ctx.roamCancels, 0);
+  });
+
+  it("cancels pacing when the mouse moves during a working session", () => {
+    ctx = makeBusyCtx();
+    tickApi = loader.initTick(ctx);
+    tickApi.startMainTick();
+    mock.timers.tick(800);
+    cursor = { x: 320, y: 280 };
+    mock.timers.tick(800);
+    assert.ok(ctx.roamCancels >= 1, "pointer movement must yield the desk to the user");
+  });
+
+  it("does not service pacing for an alert state", () => {
+    ctx = makeBusyCtx();
+    ctx.currentState = "notification";
+    tickApi = loader.initTick(ctx);
+    tickApi.startMainTick();
+    mock.timers.tick(2000);
+    assert.equal(ctx.roamTicks, 0, "alerts pin the pet still");
+    assert.equal(ctx.roamCancels, 0);
+  });
+});

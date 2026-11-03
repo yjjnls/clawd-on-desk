@@ -297,6 +297,16 @@ function runMainTickOnce() {
     // the pet (e.g. the Settings size slider) lands mid-walk only to be
     // overwritten by the walk's anchored per-frame bounds writes.
     const roamNow = ctx.currentState === "roam" && !ctx.idlePaused;
+    // Busy pacing: a working/thinking pet strolling a small stride beside a
+    // live session. It shares roam's tick entry but plays no state changes —
+    // the working visual keeps running while the window moves.
+    const busyRoamNow = !!(
+      ctx.roam
+      && ctx.roam.enabled
+      && !ctx.idlePaused
+      && typeof ctx.roam.busyPaceState === "function"
+      && ctx.roam.busyPaceState(ctx.currentState)
+    );
     const nextDelay = () => getNextTickDelay(idleNow, miniIdleNow);
 
     const enteredIdle = idleNow && !idleWasActive;
@@ -342,7 +352,8 @@ function runMainTickOnce() {
 
     // Skip expensive native IPC calls (getCursorScreenPoint, getBounds) when
     // cursor tracking is not needed — saves ~20 calls/sec to the OS layer.
-    const needsCursorPoll = idleNow || miniIdleNow || ctx.miniMode || roamNow;
+    const needsCursorPoll =
+      idleNow || miniIdleNow || ctx.miniMode || roamNow || busyRoamNow;
     if (!needsCursorPoll) return nextDelay();
 
     const cursor = screen.getCursorScreenPoint();
@@ -399,6 +410,16 @@ function runMainTickOnce() {
     }
 
     if (eyeTrackingEnabled) sendPointerBridge(cursor, bounds);
+
+    // Busy pacing keeps its own schedule outside the idle machinery: pointer
+    // movement still cancels it (the pet yields to the user), and the tick
+    // only starts/replans the pace — the walk itself is a self-driven timer
+    // chain inside roam.
+    if (busyRoamNow && !idleNow && !miniIdleNow && !roamNow) {
+      if (moved && ctx.roam && ctx.roam.enabled) ctx.roam.cancelRoam();
+      if (ctx.roam) ctx.roam.tick();
+      return nextDelay();
+    }
 
     if (!idleNow && !miniIdleNow && !roamNow) return nextDelay();
 

@@ -32,6 +32,20 @@ const ROAM_MARGIN_RATIO = 0.15;
 const ROAM_FRAME_MS = 16;
 const ROAM_TARGET_ATTEMPTS = 8;
 
+// Busy pacing — the pet strolls a small stride while a session works, keeping
+// its working visual (the walk moves the window only; no roam state swap).
+// Alerts (error/notification/attention) and the sleep sequence pin it still.
+const BUSY_ROAM_STATES = new Set([
+  "working",
+  "thinking",
+  "executing",
+  "juggling",
+  "sweeping",
+]);
+const BUSY_ROAM_INTERVAL_MS = 15000; // one pace every 15s while busy
+const BUSY_ROAM_SPEED_PX_PER_MS = 0.03; // 30px/s — a slow stroll
+const BUSY_ROAM_MAX_DIST = 220; // strides stay near the starting spot
+
 module.exports = function initRoam(ctx) {
   let enabled = false;
   let constrainAxis = false;
@@ -70,16 +84,36 @@ module.exports = function initRoam(ctx) {
       ctx.releaseReconcileProtection();
   }
 
-  function isRoamAllowed() {
+  // The pacing mode the current state maps to: "idle" — classic free roam
+  // (no active sessions); "busy" — work-adjacent pacing; null — pinned
+  // (alerts, sleep sequence, mini/preview machinery).
+  function currentMode() {
+    const state = ctx.getCurrentState ? ctx.getCurrentState() : "idle";
+    if (state === "idle" || state === "roam") return "idle";
+    if (BUSY_ROAM_STATES.has(state)) return "busy";
+    return null;
+  }
+
+  function isRoamAllowed(mode) {
     if (!enabled) return false;
+    if (mode === undefined) mode = currentMode();
+    else if (currentMode() !== mode) return false;
+    if (!mode) return false;
     if (ctx.dragLocked) return false;
     if (ctx.getMiniMode && ctx.getMiniMode()) return false;
-    const state = ctx.getCurrentState ? ctx.getCurrentState() : "idle";
-    // Allow roaming when idle (about to start) or already roaming (mid-animation)
-    if (state !== "idle" && state !== "roam") return false;
-    // A visual reaction/preview can be idle while a session is still busy.
-    // Movement eligibility follows the live activity projection as well.
-    if (typeof ctx.hasActiveSessions === "function" && ctx.hasActiveSessions()) return false;
+    const activeSessions =
+      typeof ctx.hasActiveSessions === "function"
+        ? ctx.hasActiveSessions()
+        : false;
+    if (mode === "idle") {
+      // Allow roaming when idle (about to start) or already roaming (mid-animation)
+      // A visual reaction/preview can be idle while a session is still busy.
+      // Movement eligibility follows the live activity projection as well.
+      if (activeSessions) return false;
+    } else {
+      // Busy pacing is work-adjacent: it needs a live session to pace beside.
+      if (!activeSessions) return false;
+    }
     if (ctx.miniTransitioning) return false;
     if (hasPermissionBubbleHold()) return false;
     if (
@@ -110,7 +144,8 @@ module.exports = function initRoam(ctx) {
       ctx.isPetHidden()
     )
       return false;
-    // An idle activity borrows the visual while the pet stays still.
+    // An idle activity borrows the visual while the pet stays still. Busy
+    // pacing never overlaps one: idle activities only play in idle.
     if (
       typeof ctx.isIdleActivityPlaying === "function" &&
       ctx.isIdleActivityPlaying()
@@ -119,7 +154,7 @@ module.exports = function initRoam(ctx) {
     return true;
   }
 
-  function pickRandomTarget() {
+  function pickRandomTarget(mode) {
     const bounds = ctx.getPetWindowBounds();
     if (!bounds) return null;
     const wa = ctx.getNearestWorkArea(
@@ -279,6 +314,16 @@ module.exports = function initRoam(ctx) {
       fenceAltersAxis
         ? Math.min(ROAM_MIN_DIST, Math.max(24, Math.round(range / 2)))
         : ROAM_MIN_DIST;
+    // Busy pacing shrinks the whole band to a small stride around the pet's
+    // current spot — the stroll stays near where the session parked it. The
+    // stride caps the window's top-left corner displacement, corner to
+    // corner; the work area/fence bands above still bound the result.
+    if (mode === "busy") {
+      xMin = Math.max(xMin, bounds.x - BUSY_ROAM_MAX_DIST);
+      xMax = Math.min(xMax, bounds.x + BUSY_ROAM_MAX_DIST);
+      yMin = Math.max(yMin, bounds.y - BUSY_ROAM_MAX_DIST);
+      yMax = Math.min(yMax, bounds.y + BUSY_ROAM_MAX_DIST);
+    }
     /* #686: axis-constrained roam — pick a target that varies in only one axis.
      * Randomly choose horizontal (same Y, random X) or vertical (same X, random Y).
      * The constrained branch owns its complete retry/fallback behavior: it never
@@ -442,7 +487,7 @@ module.exports = function initRoam(ctx) {
     return bestDist >= minDist ? { ...best, size, fence: fenceRect } : null;
   }
 
-  function animateTo(target) {
+  function animateTo(target, mode) {
     if (roamAnimTimer) {
       clearTimeout(roamAnimTimer);
       roamAnimTimer = null;
@@ -534,22 +579,26 @@ module.exports = function initRoam(ctx) {
     const dx = finalX - startX;
     const dy = finalY - startY;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    const animDurationMs = Math.max(1000, dist / ROAM_SPEED_PX_PER_MS);
+    const speed =
+      mode === "busy" ? BUSY_ROAM_SPEED_PX_PER_MS : ROAM_SPEED_PX_PER_MS;
+    const animDurationMs = Math.max(1000, dist / speed);
 
     // ── Face the walk direction ──
     // Dedicated roam visuals (e.g. clawd's crabwalk) are drawn facing right;
     // tell the renderer to mirror while heading left. Sent before applyState
     // so the flip is settled when the roam visual swaps in. A purely vertical
-    // walk keeps the previous heading.
-    if (typeof ctx.setRoamHeading === "function" && dx !== 0) {
+    // walk keeps the previous heading. Busy pacing skips this entirely — it
+    // keeps the working visual, so no roam flip applies.
+    if (mode !== "busy" && typeof ctx.setRoamHeading === "function" && dx !== 0) {
       ctx.setRoamHeading(dx < 0);
     }
 
     // ── Switch to "roam" visual state before moving ──
     // This ensures the pet shows a walk animation (if the theme provides one)
     // or at least the idle SVG via fallback, instead of being "dragged" in
-    // whatever frozen pose the previous state left it in.
-    if (typeof ctx.applyState === "function") {
+    // whatever frozen pose the previous state left it in. Busy pacing skips
+    // the swap: the working animation keeps playing while the window strolls.
+    if (mode !== "busy" && typeof ctx.applyState === "function") {
       ctx.applyState("roam");
     }
 
@@ -572,7 +621,7 @@ module.exports = function initRoam(ctx) {
       }
       // Re-check state on every frame: if the pet is no longer idle/roam (e.g. a
       // working/notification event arrived), stop the animation immediately.
-      if (!isRoamAllowed()) {
+      if (!isRoamAllowed(mode)) {
         // A drag only pauses the current roam phase; other gates still mean the
         // pet left normal idle eligibility and reset the next wait to 8s.
         if (hasPermissionBubbleHold() || !ctx.dragLocked) firstRoam = true;
@@ -619,8 +668,9 @@ module.exports = function initRoam(ctx) {
         notifyRoamProtectionReleased();
         // ── Return to idle via setState (respects priority) ──
         // If a higher-priority state was set while the last frame was in
-        // flight, setState("idle") won't downgrade it.
-        if (typeof ctx.setState === "function") {
+        // flight, setState("idle") won't downgrade it. Busy pacing skips the
+        // return — the working state owns the visual the whole time.
+        if (mode !== "busy" && typeof ctx.setState === "function") {
           ctx.setState("idle");
         }
         scheduleNextRoam();
@@ -629,12 +679,16 @@ module.exports = function initRoam(ctx) {
     step();
   }
 
+  let pausedMode = null; // which pacing mode the armed pause was planned for
+
   function scheduleNextRoam() {
     if (roamPauseTimer) {
       clearTimeout(roamPauseTimer);
       roamPauseTimer = null;
     }
     if (!enabled) return;
+    const mode = currentMode();
+    if (!mode) return;
     // #810: kick an async re-read of the fence file now, so the cached state
     // is fresh by the time this pause elapses and pickRandomTarget() runs.
     // Target selection itself never touches the disk. Because refresh is
@@ -648,11 +702,26 @@ module.exports = function initRoam(ctx) {
         ctx.roamFence.refresh();
       } catch {}
     }
-    const delay = firstRoam ? ROAM_IDLE_DELAY_MS : ROAM_BETWEEN_DELAY_MS;
-    firstRoam = false;
+    const delay = mode === "busy"
+      ? BUSY_ROAM_INTERVAL_MS
+      : firstRoam ? ROAM_IDLE_DELAY_MS : ROAM_BETWEEN_DELAY_MS;
+    // Busy pacing shares no clock with idle roaming: leaving busy must still
+    // grant idle its full 8s first-walk delay, so firstRoam only consumes
+    // here in the idle mode.
+    if (mode === "idle") firstRoam = false;
+    pausedMode = mode;
     roamPauseTimer = setTimeout(() => {
       roamPauseTimer = null;
-      if (!isRoamAllowed()) return;
+      // The state may have crossed modes while the pause was armed (a session
+      // ended mid-pause, or the last session started while idle was waiting).
+      // Re-plan with the new mode's own delay instead of walking on a stale
+      // schedule — this is what keeps the 8s idle-entry promise intact after
+      // a busy stretch.
+      if (currentMode() !== pausedMode) {
+        scheduleNextRoam();
+        return;
+      }
+      if (!isRoamAllowed(mode)) return;
       if (
         typeof ctx.getUnattendedMs === "function"
         && typeof ctx.getSleepTimeoutMs === "function"
@@ -661,18 +730,21 @@ module.exports = function initRoam(ctx) {
         const sleepTimeoutMs = ctx.getSleepTimeoutMs();
         // The current walk is allowed to finish. Once the existing idle
         // clock reaches the theme's sleep threshold, do not start another.
+        // Busy pacing ignores the sleep clock: a live session means the
+        // sleep sequence is not running anyway.
         if (
-          Number.isFinite(unattendedMs)
+          mode === "idle"
+          && Number.isFinite(unattendedMs)
           && Number.isFinite(sleepTimeoutMs)
           && unattendedMs >= sleepTimeoutMs
         ) return;
       }
-      const target = pickRandomTarget();
+      const target = pickRandomTarget(mode);
       if (!target) {
         scheduleNextRoam();
         return;
       }
-      animateTo(target);
+      animateTo(target, mode);
     }, delay);
   }
 
@@ -725,15 +797,25 @@ module.exports = function initRoam(ctx) {
 
   function tick() {
     if (!enabled) return;
-    if (!isRoamAllowed()) {
+    const mode = currentMode();
+    if (!isRoamAllowed(mode)) {
       // Preserve the already-consumed 4s/8s phase while drag owns movement.
       // Existing non-drag gates still reset the next idle entry to 8s.
-      if (hasPermissionBubbleHold() || !ctx.dragLocked) firstRoam = true;
+      // Only an idle-mode miss consumes firstRoam — a busy-mode miss (an
+      // alert arrived, say) says nothing about idle eligibility.
+      if (mode === "idle" && (hasPermissionBubbleHold() || !ctx.dragLocked))
+        firstRoam = true;
       cancelRoam();
       return;
     }
     if (roamActive) return;
-    if (roamPauseTimer) return;
+    if (roamPauseTimer) {
+      // A pause planned for another mode is stale — replan so the new mode's
+      // own delay applies (idle entry must still get its full 8s first walk
+      // after a busy stretch).
+      if (pausedMode !== mode) scheduleNextRoam();
+      return;
+    }
     scheduleNextRoam();
   }
 
@@ -751,6 +833,9 @@ module.exports = function initRoam(ctx) {
     cancelRoam,
     tick,
     isRoamAnimating,
+    // tick.js's cursor-poll/early-return gates need to know whether the
+    // current state is pacing-eligible without reaching into roam internals.
+    busyPaceState: (state) => BUSY_ROAM_STATES.has(state),
     get enabled() {
       return enabled;
     },
