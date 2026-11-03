@@ -197,4 +197,38 @@ describe("state-priority display selection", () => {
       updateVisualPriority: STATE_PRIORITY.notification,
     }), "notification");
   });
+
+  // A session parked on its Stop waits on the user forever; the standing-wait
+  // hold keeps the notification visual up while nothing stronger plays.
+  it("holds notification while a session awaits input and the pet would rest", () => {
+    const waiting = new Map([["s1", session("idle", { awaitingInputSinceStop: true })]]);
+    assert.strictEqual(resolveDisplayStateFromSessions(waiting, {
+      awaitingInput: true,
+    }), "notification");
+    assert.strictEqual(resolveDisplayStateFromSessions(new Map([
+      ["s1", session("sleeping")],
+    ]), { awaitingInput: true }), "notification");
+  });
+
+  it("lets any working-tier state outrank the awaiting-input hold", () => {
+    const busy = new Map([
+      ["s1", session("idle", { awaitingInputSinceStop: true })],
+      ["s2", session("thinking")],
+    ]);
+    assert.strictEqual(resolveDisplayStateFromSessions(busy, {
+      awaitingInput: true,
+    }), "thinking");
+    assert.strictEqual(resolveDisplayStateFromSessions(new Map([
+      ["s1", session("idle", { awaitingInputSinceStop: true })],
+      ["s2", session("error")],
+    ]), { awaitingInput: true }), "error");
+  });
+
+  it("does not hold notification without the awaiting-input signal", () => {
+    const waiting = new Map([["s1", session("idle", { awaitingInputSinceStop: true })]]);
+    assert.strictEqual(resolveDisplayStateFromSessions(waiting), "idle");
+    assert.strictEqual(resolveDisplayStateFromSessions(waiting, {
+      awaitingInput: false,
+    }), "idle");
+  });
 });

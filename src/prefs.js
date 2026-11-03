@@ -329,6 +329,7 @@ const SCHEMA = {
     default: 1,
     validate: (v) => Number.isFinite(v) && v >= 0 && v <= 1,
   },
+  systemNotifyEnabled: { type: "boolean", default: true },
   flashTaskbarOnComplete: { type: "boolean", default: true },
   flashIntervalMs: {
     type: "number",

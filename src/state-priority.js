@@ -76,6 +76,16 @@ function resolveDisplayStateFromSessions(sessions, options = {}) {
     best = "sweeping";
   }
 
+  // A session parked on its Stop waits on the user forever, and a oneshot
+  // alert scrolls away on its auto-return. While nothing stronger is on
+  // stage — the pet truly at rest, below even a thinking session — hold the
+  // notification visual so a standing wait for input stays visible until the
+  // session's next event clears awaitingInputSinceStop.
+  if (options.awaitingInput === true
+    && getStatePriority(best, statePriority) < getStatePriority("thinking", statePriority)) {
+    best = "notification";
+  }
+
   if (options.permissionLocked === true) {
     best = "notification";
   }

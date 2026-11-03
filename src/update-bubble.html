@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' file:">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
@@ -137,6 +137,95 @@ body { padding: 6px; }
 .pill[data-mode="downloading"] { background: #d97757; }
 .pill[data-mode="ready"] { background: #5a9e6f; }
 .pill[data-mode="error"] { background: #d15a5a; }
+.pill[data-mode="notify"] { background: #5b8dd9; }
+.card[data-mode="notify"] .title { color: #7fb2e8; }
+
+/* ── Session notifications: a string of floating comic bubbles beside the
+   pet, each with a living Clawd gif. Click a bubble to dismiss it. ── */
+.card[data-mode="notify"] {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+.card[data-mode="notify"] .header,
+.card[data-mode="notify"] .summary,
+.card[data-mode="notify"] .detail,
+.card[data-mode="notify"] .actions { display: none; }
+.notify-list { display: none; flex-direction: column; gap: 8px; }
+.card[data-mode="notify"] .notify-list { display: flex; }
+.notify-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 30px 10px 12px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--card-bg) 88%, transparent);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.34), var(--card-inset, none);
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+  animation: notify-pop 0.32s var(--ease-spring) both;
+}
+.notify-item:hover {
+  background: color-mix(in srgb, var(--card-bg) 96%, transparent);
+  transform: translateY(-1px);
+}
+/* The pet bobs gently inside its bubble while the gif animates. */
+.notify-item-icon {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  image-rendering: pixelated;
+  animation: notify-float 2.4s ease-in-out infinite;
+}
+@keyframes notify-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes notify-pop {
+  0% { opacity: 0; transform: translateY(10px) scale(0.9); }
+  60% { transform: translateY(-2px) scale(1.02); }
+  100% { opacity: 1; transform: none; }
+}
+.notify-item-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.notify-item-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+.notify-item[data-kind="complete"] .notify-item-title { color: #6fcf96; }
+.notify-item[data-kind="waiting"] .notify-item-title { color: #7fb2e8; }
+.notify-item[data-kind="error"] .notify-item-title { color: #e88080; }
+.notify-item-body {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.notify-item-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.notify-item:hover .notify-item-close { opacity: 1; }
+.notify-item-close:hover { background: rgba(255, 255, 255, 0.12); color: var(--text-main); }
 
 .message {
   font-size: 13px;
@@ -244,6 +333,7 @@ body { padding: 6px; }
   </div>
   <div class="detail" id="detail"></div>
   <div class="actions" id="actions"></div>
+  <div class="notify-list" id="notifyList"></div>
 </div>
 <script>
 const card = document.getElementById("card");
@@ -253,6 +343,7 @@ const messageEl = document.getElementById("message");
 const versionEl = document.getElementById("version");
 const detailEl = document.getElementById("detail");
 const actionsEl = document.getElementById("actions");
+const notifyListEl = document.getElementById("notifyList");
 
 function modeLabel(mode, lang) {
   const ko = {
@@ -262,6 +353,7 @@ function modeLabel(mode, lang) {
     ready: "\uC900\uBE44 \uC644\uB8CC",
     "up-to-date": "\uCD5C\uC2E0 \uBC84\uC804",
     error: "\uC624\uB958",
+    notify: "\uC54C\uB9BC",
   };
   const zh = {
     checking: "检查中",
@@ -270,6 +362,7 @@ function modeLabel(mode, lang) {
     ready: "已就绪",
     "up-to-date": "最新版本",
     error: "失败",
+    notify: "通知",
   };
   const zhTW = {
     checking: "檢查中",
@@ -278,6 +371,7 @@ function modeLabel(mode, lang) {
     ready: "已就緒",
     "up-to-date": "最新版本",
     error: "失敗",
+    notify: "通知",
   };
   const en = {
     checking: "Checking",
@@ -286,6 +380,7 @@ function modeLabel(mode, lang) {
     ready: "Ready",
     "up-to-date": "Latest",
     error: "Error",
+    notify: "Notice",
   };
   const ptBR = {
     checking: "Verificando",
@@ -294,6 +389,7 @@ function modeLabel(mode, lang) {
     ready: "Pronta",
     "up-to-date": "Atualizado",
     error: "Erro",
+    notify: "Aviso",
   };
   const es = {
     checking: "Buscando",
@@ -302,6 +398,7 @@ function modeLabel(mode, lang) {
     ready: "Lista",
     "up-to-date": "Última versión",
     error: "Error",
+    notify: "Aviso",
   };
 
   const dictMap = {
@@ -331,8 +428,61 @@ function enableButtons() {
   for (const btn of actionsEl.querySelectorAll("button")) btn.disabled = false;
 }
 
+function renderNotificationList(items) {
+  notifyListEl.innerHTML = "";
+  for (const item of items) {
+    const el = document.createElement("div");
+    el.className = "notify-item";
+    el.dataset.kind = item.kind || "waiting";
+    if (item.iconUrl) {
+      const icon = document.createElement("img");
+      icon.className = "notify-item-icon";
+      icon.src = item.iconUrl;
+      icon.alt = "";
+      el.appendChild(icon);
+    }
+    const text = document.createElement("div");
+    text.className = "notify-item-text";
+    const title = document.createElement("div");
+    title.className = "notify-item-title";
+    title.textContent = item.title || "";
+    const body = document.createElement("div");
+    body.className = "notify-item-body";
+    body.textContent = item.message || "";
+    text.append(title, body);
+    const close = document.createElement("button");
+    close.className = "notify-item-close";
+    close.textContent = "×";
+    const dismiss = () => {
+      window.updateBubbleAPI.dismissNotification(item.id);
+      el.remove();
+      reportHeight();
+    };
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      dismiss();
+    });
+    el.addEventListener("click", dismiss);
+    el.append(text, close);
+    notifyListEl.appendChild(el);
+  }
+}
+
 function show(payload) {
   const mode = payload.mode || "checking";
+
+  if (mode === "notify" && Array.isArray(payload.notifications)) {
+    titleEl.textContent = "";
+    messageEl.textContent = "";
+    detailEl.textContent = "";
+    actionsEl.innerHTML = "";
+    renderNotificationList(payload.notifications);
+    card.dataset.mode = "notify";
+    card.classList.remove("hiding");
+    card.classList.add("visible");
+    reportHeight();
+    return;
+  }
 
   titleEl.textContent = payload.title || "";
   messageEl.textContent = payload.message || "";

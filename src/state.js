@@ -239,7 +239,7 @@ if (ctx.claudeQuotaCollectionEnabled === false) {
 if (ctx.kimiQuotaCollectionEnabled === false) {
   clearLocalKimiQuota({ broadcast: false });
 }
-const MAX_SESSIONS = 20;
+const MAX_SESSIONS = 64;
 const ASSISTANT_OUTPUT_MAX = 2400;
 const CODEX_EXIT_PROBE_DELAYS_MS = [1000, 3000, 8000, 15000];
 const COMPLETION_HOUSEKEEPING_EVENTS = new Set([
@@ -2175,6 +2175,7 @@ function promoteCompletion(sessionId, completionPayload = undefined) {
   if (hasConfirmedPermissionAnimationLock()) {
     const display = resolveDisplayState();
     setState(display, getSvgOverride(display));
+    notifySystemOfCompletion(session);
     return true;
   }
   // The completion's data (done badge + Telegram push) already landed via the
@@ -2184,7 +2185,40 @@ function promoteCompletion(sessionId, completionPayload = undefined) {
   // global pending queue here; pendingTimer/pendingState are process-wide, not
   // per-session, so clearing them would swallow another session's visual.
   setState("attention", completionVisual);
+  notifySystemOfCompletion(session);
   return true;
+}
+
+// The pet's celebration is a glanceable cue; when the user is away from the
+// screen an OS banner carries the news instead. Silent — the complete chime
+// already covers audio — and toggleable via prefs (systemNotifyEnabled).
+function notifySystemOfCompletion(session) {
+  if (!session || typeof ctx.systemNotify !== "function") return;
+  ctx.systemNotify({
+    kind: "complete",
+    sessionId: session.rawSessionId || session.id,
+    title: ctx.t("systemNotifyCompleteTitle"),
+    body: sessionNotificationBody(session),
+  });
+}
+
+// One line for the OS banner: whose turn it is, plus the turn's last words
+// when we have them.
+function sessionNotificationBody(session) {
+  const label = sessionDisplayLabel(session);
+  const snippet = typeof session.assistantLastOutput === "string"
+    ? session.assistantLastOutput.replace(/\s+/g, " ").trim().slice(0, 80)
+    : "";
+  return snippet ? `${label} — ${snippet}` : label;
+}
+
+function sessionDisplayLabel(session) {
+  const title = session && typeof session.sessionTitle === "string"
+    ? session.sessionTitle.trim()
+    : "";
+  if (title) return title;
+  const raw = session && (session.rawSessionId || session.id);
+  return raw ? String(raw).slice(0, 8) : "Claude";
 }
 
 // ── Session management ──
@@ -3507,6 +3541,26 @@ function updateSession(sessionId, state, event, opts = {}) {
         && state === "sweeping"
         && (event === "PostCompact" || event === "event_msg:context_compacted"),
     });
+    // The wait-for-input oneshot scrolls away with its auto-return; the OS
+    // banner gives the standing wait one durable, dismissible surface.
+    if (state === "notification" && event === "Notification" && typeof ctx.systemNotify === "function") {
+      ctx.systemNotify({
+        kind: "waiting",
+        sessionId: sessionId,
+        title: ctx.t("systemNotifyWaitingTitle"),
+        body: sessionNotificationBody(sessions.get(sessionId)),
+      });
+    }
+    // A mid-task failure is exactly the "tell me when something breaks"
+    // case: banner it the moment it lands, no quiet-window wait.
+    if (state === "error" && typeof ctx.systemNotify === "function") {
+      ctx.systemNotify({
+        kind: "error",
+        sessionId: sessionId,
+        title: ctx.t("systemNotifyErrorTitle"),
+        body: sessionNotificationBody(sessions.get(sessionId)),
+      });
+    }
     return;
   }
 
@@ -4200,13 +4254,30 @@ function refreshPetPresentation() {
 // Child/pending-attention projection first, then the strict temporary-chat
 // filter, so a parent kept juggling or waiting is never collapsed off the pet.
 function resolveDisplayState() {
-  return resolveDisplayStateFromSessions(getPetPresentationSessions(codexSubagentPresentation.project(getCodexPendingAttentionIds())), {
+  const presentation = getPetPresentationSessions(codexSubagentPresentation.project(getCodexPendingAttentionIds()));
+  return resolveDisplayStateFromSessions(presentation, {
     statePriority: STATE_PRIORITY,
     compacting: hasCodexCompactionVisual(),
     permissionLocked: hasPermissionAnimationLock(),
+    awaitingInput: hasAwaitingInputSession(presentation),
     updateVisualState,
     updateVisualPriority,
   });
+}
+
+// One of our sessions finished its turn and now sits on the wait for the
+// user's next prompt — `awaitingInputSinceStop`, which that prompt's first
+// event clears. This is the standing half of the wait alert: the oneshot
+// Notification cue scrolls away with its auto-return, this holds the pet on
+// notification for as long as the wait lasts.
+function hasAwaitingInputSession(presentation) {
+  for (const [, session] of presentation) {
+    if (session && !session.headless
+      && session.state === "idle" && session.awaitingInputSinceStop === true) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function setUpdateVisualState(kind) {

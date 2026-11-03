@@ -37,4 +37,30 @@ describe("Claude Stop disposition typed background-subagent gate (#952)", () => 
     assert.strictEqual(getClaudeStopDisposition({ sessionCronsCount: 1 }).kind, "hold");
     assert.strictEqual(getClaudeStopDisposition({ stopHookActive: true }).kind, "hold");
   });
+
+  // Loops and scheduled prompts fire the next turn tens of seconds after an
+  // intermediate Stop; the interactive quiet window lets that next turn
+  // cancel the celebration so only a genuine finish promotes.
+  it("debounces a bare interactive Stop by the quiet window instead of promoting", () => {
+    assert.deepStrictEqual(getClaudeStopDisposition({
+      backgroundTasksCount: 0,
+      hasFinalAssistantText: true,
+      headless: false,
+      env: {},
+    }), { kind: "debounce", debounceMs: 30000 });
+    assert.deepStrictEqual(getClaudeStopDisposition({
+      hasFinalAssistantText: false,
+      headless: false,
+      env: {},
+    }), { kind: "debounce", debounceMs: 30000 });
+    // env override stays available for tuning, now up to five minutes.
+    assert.deepStrictEqual(getClaudeStopDisposition({
+      headless: false,
+      env: { CLAWD_COMPLETION_DEBOUNCE_MS: "120000" },
+    }), { kind: "debounce", debounceMs: 120000 });
+    assert.deepStrictEqual(getClaudeStopDisposition({
+      headless: true,
+      env: {},
+    }), { kind: "debounce", debounceMs: 2000 });
+  });
 });

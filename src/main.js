@@ -1859,6 +1859,69 @@ function resetSoundCooldown() {
   lastSoundTime = 0;
 }
 
+// Session-notification push for completion / wait-for-input / error
+// (state.js ctx.systemNotify). Rides the pet-side update-bubble window in
+// "notify" mode: a stacked list floating next to the pet, one row per
+// notice, each row clicked away individually. Rows persist until dismissed
+// — the list is the durable surface, the pet's alert animation the ambient
+// one. Gated by the systemNotifyEnabled pref plus the do-not-disturb switch.
+const petNotifications = new Map();
+// Per-kind animated Clawd — the bubble carries a living pet, not a static icon.
+const NOTIFY_GIF_BY_KIND = {
+  complete: "clawd-happy.gif",
+  waiting: "clawd-notification.gif",
+  error: "clawd-error.gif",
+};
+
+function petNotifyIconUrl(kind) {
+  try {
+    const gif = NOTIFY_GIF_BY_KIND[kind] || "clawd-idle.gif";
+    // asarUnpack lands the gifs beside the archive; unpacked resources are
+    // the ones Chromium's file:// handler will actually load as images.
+    const base = app.getAppPath().replace(/app\.asar$/, "app.asar.unpacked");
+    return require("url").pathToFileURL(
+      require("path").join(base, "assets", "gif", gif)
+    ).href;
+  } catch {
+    return "";
+  }
+}
+
+function systemNotify({ kind, sessionId, title, body }) {
+  try {
+    if (!_settingsController.get("systemNotifyEnabled")) return;
+    if (doNotDisturb) return;
+    const id = `${kind || "info"}:${sessionId || "global"}`;
+    petNotifications.set(id, {
+      id,
+      kind: kind || "waiting",
+      title: String(title || ""),
+      message: String(body || ""),
+      iconUrl: petNotifyIconUrl(kind || "waiting"),
+    });
+    renderPetNotifications();
+  } catch (err) {
+    console.warn("Clawd: pet notify failed:", err && err.message);
+  }
+}
+
+function renderPetNotifications() {
+  if (!petNotifications.size) {
+    _updateBubble.hideUpdateBubble();
+    return;
+  }
+  _updateBubble.showUpdateBubble({
+    mode: "notify",
+    notifications: [...petNotifications.values()],
+    lang: _settingsController.get("lang") || "en",
+  });
+}
+
+function dismissPetNotification(id) {
+  if (!id || !petNotifications.delete(id)) return;
+  renderPetNotifications();
+}
+
 function stopTrayFlash() {
   if (trayFlashTimer) {
     clearInterval(trayFlashTimer);
@@ -2290,6 +2353,7 @@ function getPendingPermissionFocusEntry(sessionId) {
 }
 
 const _updateBubbleCtx = {
+  onNotifyDismiss: dismissPetNotification,
   get win() { return win; },
   get bubbleFollowPet() { return bubbleFollowPet; },
   get bubbleFollowPreference() { return bubbleFollowPreference; },
@@ -2459,6 +2523,7 @@ const _stateCtx = {
   syncHitWin,
   playSound,
   flashTaskbar,
+  systemNotify,
   t: (key) => t(key),
   focusTerminalWindow: (...args) => focusTerminalWindow(...args),
   resolvePermissionEntry: (...args) => resolvePermissionEntry(...args),

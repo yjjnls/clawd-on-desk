@@ -34,6 +34,7 @@ function registerUpdateBubbleIpc(options = {}) {
 
   on("update-bubble-height", (event, height) => updateBubble.handleUpdateBubbleHeight(event, height));
   on("update-bubble-action", (event, actionId) => updateBubble.handleUpdateBubbleAction(event, actionId));
+  on("update-bubble-notify-dismiss", (event, id) => updateBubble.handleNotifyDismiss(event, id));
 
   return {
     dispose() {
@@ -61,8 +62,16 @@ function deferMacFloatingVisibility(ctx, win) {
 function getPolicy(ctx) {
   if (typeof ctx.getBubblePolicy === "function") {
     try {
-      const policy = ctx.getBubblePolicy("update");
-      if (policy && typeof policy.enabled === "boolean") return policy;
+      // Session notifications ride the same window with the notification
+      // class's policy (auto-close seconds), updater payloads keep "update".
+      const policy = ctx.getBubblePolicy(policyClass);
+      if (policy && typeof policy.enabled === "boolean") {
+        // Notices stay on screen until dismissed one by one — the auto-close
+        // budget belongs to the updater prompts, not to a list the user is
+        // working through.
+        if (policyClass === "notification") return { enabled: policy.enabled, autoCloseMs: 0 };
+        return policy;
+      }
     } catch {}
   }
   return { enabled: true, autoCloseMs: 0 };
@@ -284,6 +293,9 @@ function computeUpdateBubbleBounds({
 
 module.exports = function initUpdateBubble(ctx) {
   let bubble = null;
+  // Which bubble policy the current payload uses: "update" for updater
+  // prompts, "notification" when a session notification borrows the window.
+  let policyClass = "update";
   // CSS px, as reported by the renderer; converted to DIP where consumed.
   let measuredHeight = 0;
   let activePayload = null;
@@ -547,6 +559,7 @@ module.exports = function initUpdateBubble(ctx) {
   }
 
   function showUpdateBubble(payload) {
+    policyClass = payload && payload.mode === "notify" ? "notification" : "update";
     const policy = getPolicy(ctx);
     const fallback = payload && payload.defaultAction != null ? payload.defaultAction : null;
     if (hideTimer) {
@@ -743,6 +756,14 @@ module.exports = function initUpdateBubble(ctx) {
     }
   }
 
+  // A session-notification row was clicked away; the owner of the notice
+  // list (main.js) drops it and re-renders what's left.
+  function handleNotifyDismiss(event, id) {
+    const senderWin = BrowserWindow.fromWebContents(event.sender);
+    if (!bubble || senderWin !== bubble) return;
+    if (typeof ctx.onNotifyDismiss === "function") ctx.onNotifyDismiss(String(id || ""));
+  }
+
   function cleanup() {
     if (hideTimer) clearTimeout(hideTimer);
     clearAutoCloseTimer();
@@ -758,6 +779,7 @@ module.exports = function initUpdateBubble(ctx) {
     repositionUpdateBubble,
     handleUpdateBubbleAction,
     handleUpdateBubbleHeight,
+    handleNotifyDismiss,
     syncVisibility,
     hideForPolicy,
     refreshAutoCloseForPolicy,
